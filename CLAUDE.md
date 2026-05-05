@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-小智AI (XiaoZhi AI) backend management system — a SaaS operations platform for ESP32 AI device fleets. This repo owns the **backend API** (`src/`, Express.js on port 8088) and the **admin frontend** (`admin-frontend/`, React + Ant Design on port 5173 dev / 8080 prod). ESP32 firmware and WeChat mini-program are owned by other teams.
+小氧AI (XiaoZhi AI) backend management system — a SaaS operations platform for ESP32 AI device fleets. This repo owns the **backend API** (`src/`, Express.js on port 8088) and the **admin frontend** (`admin-frontend/`, React + Ant Design on port 5173 dev / 8080 prod). ESP32 firmware and WeChat mini-program are owned by other teams.
 
 The system extends the official `xiaozhi-esp32-server` database (MySQL + Redis) with custom tables — it does **not** run its own database server.
 

@@ -34,7 +34,7 @@ export default function AppLayout() {
       <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} theme="dark">
         <div style={{ height: 64, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
           <RobotOutlined style={{ color: '#1677ff', fontSize: 22 }} />
-          {!collapsed && <span style={{ color: '#fff', fontWeight: 600, fontSize: 15 }}>小智AI管理</span>}
+          {!collapsed && <span style={{ color: '#fff', fontWeight: 600, fontSize: 15 }}>小氧AI管理</span>}
         </div>
         <Menu
           theme="dark"

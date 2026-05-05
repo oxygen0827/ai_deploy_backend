@@ -20,7 +20,7 @@ router.post('/verify', deviceVerifier, async (req, res, next) => {
     if (existingDevice?.is_paired) {
       return res.json(success({
         status: 'already_paired',
-        device_name: existingDevice.name || '小智AI设备',
+        device_name: existingDevice.name || '小氧AI设备',
         paired_at: existingDevice.paired_at,
       }, '设备已配对'));
     }
@@ -49,7 +49,7 @@ router.post('/verify', deviceVerifier, async (req, res, next) => {
       device_id,
       pair_token,
       expires_at: expires_at.toISOString(),
-      device_name: existingDevice?.name || '小智AI设备',
+      device_name: existingDevice?.name || '小氧AI设备',
       firmware: existingDevice?.firmware || null,
     }));
   } catch (err) {

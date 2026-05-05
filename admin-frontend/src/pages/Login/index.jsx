@@ -33,7 +33,7 @@ export default function Login() {
       <Card style={{ width: 380, boxShadow: '0 4px 24px rgba(0,0,0,0.1)' }}>
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
           <RobotOutlined style={{ fontSize: 48, color: '#1677ff' }} />
-          <h2 style={{ marginTop: 12, marginBottom: 4 }}>小智AI 后台管理</h2>
+          <h2 style={{ marginTop: 12, marginBottom: 4 }}>小氧AI 后台管理</h2>
           <p style={{ color: '#888', fontSize: 13 }}>请使用管理员账号登录</p>
         </div>
         <Form form={form} onFinish={onFinish} layout="vertical" size="large">

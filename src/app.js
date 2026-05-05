@@ -33,7 +33,7 @@ if (require.main === module) {
   wsManager.setup(server);
 
   server.listen(PORT, () => {
-    console.log(`[Server] 小智AI后台API 启动，端口 ${PORT}`);
+    console.log(`[Server] 小氧AI后台API 启动，端口 ${PORT}`);
     console.log(`[Server] 环境: ${process.env.NODE_ENV || 'development'}`);
 
     // 启动定时任务

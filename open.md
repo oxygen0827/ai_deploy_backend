@@ -39,7 +39,7 @@ WS_BASE_URL=ws://localhost:8088
 后端启动成功后应看到：
 ```
 [WS] WebSocket 服务已启动，路径 /ws/device
-[Server] 小智AI后台API 启动，端口 8088
+[Server] 小氧AI后台API 启动，端口 8088
 [Jobs] 定时任务已启动
 ```
 
@@ -124,7 +124,7 @@ npm start
 
 看到以下输出说明启动成功：
 ```
-[Server] 小智AI后台API 启动，端口 8088
+[Server] 小氧AI后台API 启动，端口 8088
 [Redis] connected
 [Jobs] 定时任务已启动
 ```

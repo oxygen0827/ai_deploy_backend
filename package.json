@@ -1,7 +1,7 @@
 {
   "name": "xiaozhi-admin-backend",
   "version": "1.0.0",
-  "description": "小智AI后台管理系统 - 后端API",
+  "description": "小氧AI后台管理系统 - 后端API",
   "main": "src/app.js",
   "scripts": {
     "start": "node src/app.js",
