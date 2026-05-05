@@ -29,9 +29,19 @@ DATABASE_URL="mysql://root:xiaozhi123@localhost:3306/xiaozhi"
 REDIS_HOST=localhost
 REDIS_PORT=6379
 REDIS_PASSWORD=
+WX_APPID=                   # 留空 = dev 模式（code 直接当 openid）
+WX_SECRET=
+WS_BASE_URL=ws://localhost:8088
 ```
 
 > **注意：** 系统开启了 Clash 代理（port 7897），curl 访问 localhost 会出现 502，属正常现象。浏览器访问不受影响，直接打开 http://localhost:5173 即可。
+
+后端启动成功后应看到：
+```
+[WS] WebSocket 服务已启动，路径 /ws/device
+[Server] 小智AI后台API 启动，端口 8088
+[Jobs] 定时任务已启动
+```
 
 ---
 
@@ -74,6 +84,13 @@ DEVICE_SIGN_SECRET=换一个随机字符串
 
 # 前端地址（开发时默认 5173）
 CORS_ORIGIN=http://localhost:5173
+
+# EspLink 微信小程序配网集成
+# 留空则启用 dev 模式（wx.login 的 code 直接当 openid，无需真实微信环境）
+WX_APPID=your_wx_appid
+WX_SECRET=your_wx_secret
+# 返回给固件的 WebSocket 基础地址；生产改为 wss://your-domain.com
+WS_BASE_URL=ws://localhost:8088
 ```
 
 ---
@@ -87,7 +104,7 @@ CORS_ORIGIN=http://localhost:5173
 npm run db:push
 ```
 
-> 这会在你连接的 MySQL 数据库里新建 `tenants`、`api_keys`、`devices`、`usage_logs`、`usage_hourly`、`pair_records` 六张表，**不影响官方已有的表**。
+> 这会新建 `tenants`、`api_keys`、`devices`、`usage_logs`、`usage_hourly`、`pair_records`、`wechat_users` 七张表，**不影响官方已有的表**。
 
 ---
 
@@ -216,3 +233,12 @@ Redis 断线时限流和 Key 缓存会自动降级（放行请求），不影响
 
 **Q: 登录提示"用户名或密码错误"**
 检查 `.env` 中 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD` 与你输入的是否一致，修改后需重启后端。
+
+**Q: EspLink 小程序调用接口报错**
+确认 `esplink-app/utils/api.js` 里的 `BASE_URL` 已改为 `http://localhost:8088`（开发）或实际服务器地址（生产）。微信开发者工具需在「详情 → 本地设置」中勾选「不校验合法域名」。
+
+**Q: 固件调用 `/api/ota/check` 失败**
+固件的 `BOOT_REGISTER_URL`（`main.c` 第27行）需改为后端实际地址（开发环境无法直接用 localhost，需用电脑局域网 IP，如 `http://192.168.x.x:8088/api/ota/check`）。
+
+**Q: WebSocket 设备无法连接**
+检查 `.env` 中 `WS_BASE_URL` 与固件实际能访问的地址一致。开发时用 `ws://192.168.x.x:8088`（局域网 IP），生产用 `wss://your-domain.com`。

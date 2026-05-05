@@ -8,6 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The system extends the official `xiaozhi-esp32-server` database (MySQL + Redis) with custom tables — it does **not** run its own database server.
 
+**EspLink 集成（2026-05-05 完成）**：已与团队的 EspLink BLE 配网系统打通。ESP32 固件通过 `/api/ota/check` 注册并获取 WebSocket 地址；微信小程序通过 `/api/auth/wechat`、`/api/device/*` 完成登录、设备发现和绑定；后端提供 `/ws/device` WebSocket 长连接供固件使用。EspLink 路由挂载在 `/api/`（无 v1 前缀），与管理路由 `/api/v1/` 并存。
+
 ## 当前环境状态（2026-05-05）✅ 全部完成
 
 > **本地环境已全部配置完成，前后端均已验证可登录。**
@@ -60,9 +62,11 @@ REDIS_PASSWORD=
 ## Critical Constraints
 
 - **Express must stay at `^4.22.1`** — never upgrade to Express 5. Breaking changes burned us in `account-manager`. Already pinned in `package.json`.
-- All API routes use the `/api/v1/` prefix.
+- Management API routes use the `/api/v1/` prefix. **EspLink-compatible routes use `/api/` (no v1)** — this is intentional for firmware/mini-program compatibility.
 - Rate limiting **must** use Redis — multi-process deploys share no in-memory state.
 - **Prisma `groupBy` does not support relation filters in `where`** — always resolve related IDs first (e.g. fetch `api_key_id` list for a tenant), then filter with `{ api_key_id: { in: [...] } }`. Affected functions: `getStatsByModel`, `getDailyStats` fallback.
+- **WebSocket requires `http.createServer`** — `app.listen()` was replaced with `http.createServer(app)` + `wsManager.setup(server)`. Do not revert to `app.listen()` or WebSocket will break.
+- **Device MAC in URLs** — EspLink routes encode MAC as `AA-BB-CC-DD-EE-FF` (dashes, not colons) to avoid Express route-param conflicts. Always `replace(/-/g, ':')` when querying the DB.
 
 ## Development Commands
 
@@ -86,13 +90,14 @@ npm run preview      # preview built output
 ```
 backend/
 ├── src/
-│   ├── app.js                   # Express entry; mounts /api/v1 router; starts cron jobs
+│   ├── app.js                   # Express entry; http.createServer + WS setup; mounts /api/v1 and /api routers
 │   ├── config/
 │   │   ├── database.js          # Singleton PrismaClient (global.__prisma in dev)
 │   │   └── redis.js             # ioredis client, lazyConnect, graceful error handling
 │   ├── middleware/
 │   │   ├── requestId.js         # Injects req.requestId; overrides res.json with spread to add requestId
 │   │   ├── adminAuth.js         # JWT Bearer token verification for management routes
+│   │   ├── wechatAuth.js        # JWT Bearer token verification for EspLink mini-program routes
 │   │   ├── keyValidator.js      # API Key check with Redis TTL=60s cache
 │   │   ├── rateLimiter.js       # Redis Lua token-bucket factory → returns middleware
 │   │   ├── deviceVerifier.js    # Optional HMAC-SHA256 signature check (skips if fields absent)
@@ -106,13 +111,17 @@ backend/
 │   │   ├── devices.js           # POST /register (public); rest behind adminAuth
 │   │   ├── usage.js             # summary/daily/by-key/by-model/logs; behind adminAuth
 │   │   ├── pair.js              # verify/confirm/status — public, no auth required
-│   │   └── operation.js         # overview/top-tenants/active-devices; behind adminAuth
+│   │   ├── operation.js         # overview/top-tenants/active-devices; behind adminAuth
+│   │   └── esplink.js           # EspLink 兼容路由（/api/ 前缀）：ota/check, auth/wechat, device/*
 │   ├── services/
 │   │   ├── keyService.js        # Key CRUD; invalidates Redis cache on write
 │   │   ├── deviceService.js     # Device CRUD; registerDevice links pair_records on first boot
 │   │   ├── usageService.js      # Stats queries; groupBy uses direct field filters only
 │   │   ├── alertService.js      # Webhook POST when tenant usage ≥ alert_threshold
-│   │   └── operationService.js  # Overview + top-tenant + active-device aggregations
+│   │   ├── operationService.js  # Overview + top-tenant + active-device aggregations
+│   │   └── wechatService.js     # WeChat code2session, bootRegister, lookupDevice, bindDevice
+│   ├── ws/
+│   │   └── deviceWsManager.js   # WebSocket server on /ws/device; auth via device_key; ping/command
 │   ├── jobs/
 │   │   ├── heartbeatChecker.js  # Cron every minute; marks is_online=false after 2 min silence
 │   │   ├── usageAggregator.js   # Cron 5 * * * *; rolls usage_logs → usage_hourly
@@ -121,7 +130,7 @@ backend/
 │       ├── uuid.js              # generateApiKey / generatePairToken / generateRequestId
 │       ├── response.js          # success(data) / paginated(list,page,pageSize,total) / error(code,msg)
 │       └── cert.js              # verifyDeviceSign — timingSafeEqual with length guard
-├── prisma/schema.prisma         # 6 models: Tenant ApiKey Device UsageLog UsageHourly PairRecord
+├── prisma/schema.prisma         # 8 models: Tenant ApiKey Device UsageLog UsageHourly PairRecord WechatUser
 ├── admin-frontend/
 │   ├── vite.config.js           # Proxies /api → http://localhost:8088
 │   └── src/
@@ -161,11 +170,37 @@ backend/
 5. Poll status via GET /api/v1/pair/status/:deviceId
 ```
 
+## EspLink 集成接口
+
+EspLink 路由挂载在 `/api/`（无 v1 前缀），与管理路由并存。
+
+| 方法 | 路径 | 认证 | 调用方 | 说明 |
+|---|---|---|---|---|
+| POST | `/api/auth/wechat` | 无 | 小程序 | 微信 code 换 JWT |
+| POST | `/api/ota/check` | 无 | 固件 | 设备启动注册，返回 `token` + `websocket_url` |
+| GET | `/api/device/list` | wechatAuth | 小程序 | 用户已绑定设备列表 |
+| GET | `/api/device/lookup?mac_suffix=AABBCC` | wechatAuth | 小程序 | 按 MAC 后三字节查找刚上线设备 |
+| POST | `/api/device/bind` | wechatAuth | 小程序 | 绑定设备到当前微信用户 |
+| POST | `/api/device/:mac/command` | wechatAuth | 小程序 | 通过 WebSocket 下发指令（`:mac` 用 `-` 代替 `:`） |
+| WS | `/ws/device` | device_key | 固件 | 设备长连接，支持 hello/ping/command/ota_push |
+
+**WebSocket 消息格式：**
+```
+固件 → 服务器: { type: "hello", capabilities, firmware_version, session_id }
+服务器 → 固件: { type: "hello_ack", is_bound: bool }
+固件 → 服务器: { type: "ping" }
+服务器 → 固件: { type: "pong" }
+服务器 → 固件: { type: "command", payload: {...} }
+```
+
+**device_key 生命周期**：首次 `POST /api/ota/check` 时生成 64 位随机 hex，存入 `devices.device_key`，后续同一 MAC 复用同一 key。固件将其存入 NVS，WebSocket 连接时放入 `Authorization: Bearer` 头。
+
 ## Key Architectural Decisions
 
 | Decision | Choice | Reason |
 |---|---|---|
 | Express version | Lock `^4.22.1` | Prior incident with Express 5 breaking changes |
+| HTTP server | `http.createServer(app)` | Required for WebSocket (`ws` lib) to attach to same port |
 | Stats queries | `usage_hourly` first, fallback to `usage_logs` | Aggregation table empty on fresh deploy; fallback prevents blank charts |
 | `groupBy` tenant filter | Pre-fetch key IDs, use `api_key_id: { in }` | Prisma `groupBy` rejects relation filters at runtime |
 | Rate limiting | Redis Lua token-bucket | Shared state across processes |
@@ -173,6 +208,8 @@ backend/
 | Device signature | HMAC-SHA256 `device_id:mac`, optional | MAC is spoofable; signature optional so unpatched firmware still works |
 | Alert delivery | Webhook POST to per-tenant URL | Decoupled from notification channel |
 | `requestId` injection | Middleware overrides `res.json` with spread | Routes stay clean; no manual threading of requestId |
+| WeChat JWT | Same `JWT_SECRET`, `type: 'wechat'` claim | Reuse secret; `wechatAuth` middleware rejects `type: 'admin'` tokens |
+| MAC in URL | Dashes `AA-BB-CC-DD-EE-FF` | Colons break Express `:param` parsing |
 
 ## Database Tables
 
@@ -180,10 +217,11 @@ backend/
 |---|---|
 | `tenants` | PK: `id` (int). Has `usage_alert_webhook` + `alert_threshold` |
 | `api_keys` | PK: `id` (varchar 64, `sk-` prefix UUID). FK → tenants |
-| `devices` | PK: `mac_address`. `device_id` is the QR-code identifier (not PK) |
+| `devices` | PK: `mac_address`. `device_id` = QR-code identifier. `device_key` = 64-hex WebSocket auth token. `board_type`/`capabilities` = EspLink 设备元数据. `wechat_user_id` = FK → wechat_users |
 | `usage_logs` | Kept 7 days only. Relation filters work in `findMany`/`count` but NOT in `groupBy` |
 | `usage_hourly` | Unique on `(api_key_id, hour_timestamp)`. Primary stats source |
-| `pair_records` | Tracks pairing lifecycle: `pending → paired / failed` |
+| `pair_records` | Tracks QR-code pairing lifecycle: `pending → paired / failed` |
+| `wechat_users` | PK: `id` (int). `openid` UNIQUE. 微信用户，通过 EspLink 小程序登录创建 |
 
 ## Background Jobs
 
@@ -199,11 +237,14 @@ backend/
 |---|---|---|
 | `DATABASE_URL` | Yes | MySQL connection string |
 | `REDIS_HOST` / `REDIS_PORT` | Yes | Redis connection |
-| `JWT_SECRET` | Yes | Change from default in production |
+| `JWT_SECRET` | Yes | Shared by admin JWT and WeChat JWT (different `type` claim) |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | Yes | Management console login |
 | `DEVICE_SIGN_SECRET` | No | If absent, device signatures are skipped |
 | `CORS_ORIGIN` | No | Comma-separated allowed origins; defaults to `*` |
 | `PORT` | No | Defaults to 8088 |
+| `WX_APPID` | No | 微信小程序 AppID；留空则启用 dev 模式（code 直接当 openid） |
+| `WX_SECRET` | No | 微信小程序 AppSecret；生产必填 |
+| `WS_BASE_URL` | No | 返回给固件的 WebSocket 基础地址，默认 `ws://localhost:8088`；生产改为 `wss://your-domain` |
 
 ## Deployment Target
 

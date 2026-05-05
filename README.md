@@ -1,12 +1,14 @@
 # 小智AI 后台管理系统
 
-基于 ESP32 的 AI 硬件设备运营管控平台。用户购买设备后，通过微信小程序扫描设备二维码即可完成配对，无需手动配网。平台提供 API Key 管理、用量统计、多租户隔离等完整 SaaS 管控能力。
+基于 ESP32 的 AI 硬件设备运营管控平台。已与 EspLink BLE 配网系统打通：用户通过微信小程序蓝牙配网后，设备自动注册上线并与账号绑定；管理员通过后台掌握所有设备、租户和用量数据。平台提供 API Key 管理、用量统计、多租户隔离等完整 SaaS 管控能力。
 
 ---
 
 ## 功能特性
 
-- **扫码配对** — 微信小程序扫描设备二维码，一键完成设备与用户的绑定，取代繁琐的 WiFi 配网流程
+- **BLE 蓝牙配网** — 微信小程序通过 EspLink BLE 协议为 ESP32 配网，配网成功后设备自动注册并绑定到微信账号
+- **扫码配对** — 同时支持微信小程序扫描设备二维码完成配对（备用流程）
+- **WebSocket 长连接** — 固件通过 `/ws/device` 与后端保持长连接，支持实时指令下发和 OTA 推送
 - **多租户管理** — 支持按客户/团队隔离，每个租户独立的 API Key 池和用量配额
 - **API Key 管控** — 生成、启停、限额、过期时间，支持 Redis 缓存加速验证（命中率 >95%）
 - **设备管理** — 实时在线状态、心跳检测、强制下线、设备解绑、手动分配 Key
@@ -20,14 +22,18 @@
 ## 系统架构
 
 ```
-微信小程序                    ESP32 设备
-    │  扫码 → pair/verify        │  注册 → devices/register
-    │  确认 → pair/confirm       │  心跳 → last_seen 更新
-    └──────────────┬─────────────┘
+微信小程序 (EspLink)               ESP32 设备 (EspLink 固件)
+    │  BLE 配网 → WiFi 连接          │  POST /api/ota/check  → 注册+获取 token
+    │  POST /api/auth/wechat         │  WS  /ws/device       → 长连接
+    │  GET  /api/device/lookup       │  心跳 ping → last_seen 更新
+    │  POST /api/device/bind         │
+    └──────────────┬─────────────────┘
                    ▼
         ┌─────────────────────┐
-        │   后端 API (8088)   │  Express 4.x + Prisma + Redis
-        │   /api/v1/...       │
+        │   后端 API (8088)   │  Express 4.x + Prisma + Redis + ws
+        │   /api/v1/...  管理 │
+        │   /api/...  EspLink │
+        │   /ws/device   WS   │
         └──────────┬──────────┘
                    │
         ┌──────────▼──────────┐
@@ -66,8 +72,9 @@
 |---|---|
 | `tenants` | 租户，含每日/月限额和告警 Webhook |
 | `api_keys` | API Key，含用量计数和过期时间 |
-| `devices` | 设备，以 MAC 地址为主键，记录在线状态和配对信息 |
-| `pair_records` | 配对记录，存储二维码 device_id 与用户 openid 的绑定过程 |
+| `devices` | 设备，以 MAC 地址为主键；含 `device_key`（WebSocket 认证）、`board_type`、`capabilities`、`wechat_user_id` |
+| `wechat_users` | 微信用户，通过 EspLink 小程序登录自动创建，与设备关联 |
+| `pair_records` | 二维码配对记录，存储 device_id 与用户 openid 的绑定过程 |
 | `usage_logs` | 调用明细，按月分区，保留 7 天 |
 | `usage_hourly` | 每小时预聚合，统计查询的主要数据源 |
 
@@ -75,29 +82,55 @@
 
 ## API 概览
 
-> 所有路由均带 `/api/v1/` 版本前缀。管理接口需在 `Authorization: Bearer <token>` 头中携带登录令牌；配对接口无需认证。
+### 管理接口（`/api/v1/` 前缀，需 Bearer 管理员 token）
 
 | 模块 | 路径 | 说明 |
 |---|---|---|
-| 认证 | `POST /auth/login` | 管理员登录 |
-| 租户 | `GET/POST/PATCH/DELETE /tenants` | 租户 CRUD |
-| API Key | `GET/POST/PATCH/DELETE /keys` | Key 管理 |
-| 设备 | `GET /devices` | 设备列表 |
-| 设备 | `POST /devices/register` | 固件自注册（无需认证） |
-| 设备 | `POST /devices/:mac/kick` | 强制下线 |
-| 设备 | `POST /devices/:mac/unbind` | 解绑 |
-| 配对 | `POST /pair/verify` | 小程序发起配对（无需认证） |
-| 配对 | `POST /pair/confirm` | 小程序确认配对（无需认证） |
-| 配对 | `GET /pair/status/:deviceId` | 查询配对状态 |
-| 用量 | `GET /usage/summary` | 汇总统计 |
-| 用量 | `GET /usage/daily` | 按天趋势 |
-| 用量 | `GET /usage/logs` | 调用明细（7天内） |
-| 运营 | `GET /operation/overview` | 运营大盘 |
-| 健康 | `GET /health/ready` | 就绪检查（含 DB + Redis） |
+| 认证 | `POST /api/v1/auth/login` | 管理员登录 |
+| 租户 | `GET/POST/PATCH/DELETE /api/v1/tenants` | 租户 CRUD |
+| API Key | `GET/POST/PATCH/DELETE /api/v1/keys` | Key 管理 |
+| 设备 | `GET /api/v1/devices` | 设备列表 |
+| 设备 | `POST /api/v1/devices/register` | 固件自注册（无需认证） |
+| 设备 | `POST /api/v1/devices/:mac/kick` | 强制下线 |
+| 设备 | `POST /api/v1/devices/:mac/unbind` | 解绑 |
+| 配对 | `POST /api/v1/pair/verify` | 小程序发起配对（无需认证） |
+| 配对 | `POST /api/v1/pair/confirm` | 小程序确认配对（无需认证） |
+| 用量 | `GET /api/v1/usage/summary` | 汇总统计 |
+| 用量 | `GET /api/v1/usage/daily` | 按天趋势 |
+| 用量 | `GET /api/v1/usage/logs` | 调用明细（7天内） |
+| 运营 | `GET /api/v1/operation/overview` | 运营大盘 |
+| 健康 | `GET /api/v1/health/ready` | 就绪检查（含 DB + Redis） |
+
+### EspLink 接口（`/api/` 前缀，固件和小程序使用）
+
+| 模块 | 路径 | 认证 | 说明 |
+|---|---|---|---|
+| 微信登录 | `POST /api/auth/wechat` | 无 | 小程序 code 换 JWT token |
+| 固件注册 | `POST /api/ota/check` | 无 | 设备上电注册，返回 device_key + ws 地址 |
+| 设备列表 | `GET /api/device/list` | 微信 JWT | 当前用户的绑定设备 |
+| 设备查找 | `GET /api/device/lookup?mac_suffix=AABBCC` | 微信 JWT | 按 MAC 后三字节查找刚上线设备 |
+| 设备绑定 | `POST /api/device/bind` | 微信 JWT | 绑定设备到微信账号 |
+| 下发指令 | `POST /api/device/:mac/command` | 微信 JWT | 通过 WebSocket 向设备推送指令 |
+| WebSocket | `WS /ws/device` | device_key | 固件长连接（hello/ping/command） |
 
 ---
 
-## 设备配对流程
+## 设备配网与配对流程
+
+### EspLink BLE 配网流程（主流程）
+
+```
+1. 设备上电，无 WiFi 凭证 → 启动 BLE 广播 "Device-AABBCC"
+2. 用户打开微信小程序 → BLE 扫描发现设备
+3. 小程序通过 BluFi 协议发送 WiFi SSID/密码 → 设备连接 WiFi
+4. 设备 WiFi 上线 → 调用 POST /api/ota/check
+   → 后端自动注册设备（首次），返回 device_key + websocket_url
+5. 固件建立 WebSocket 长连接 /ws/device，发送 hello 握手
+6. 小程序轮询 GET /api/device/lookup?mac_suffix=AABBCC 等待设备上线
+7. 发现设备 → 调用 POST /api/device/bind → 设备绑定到微信账号
+```
+
+### 二维码配对流程（备用流程）
 
 ```
 1. 设备出厂时二维码内含唯一 device_id
