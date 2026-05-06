@@ -12,6 +12,8 @@ The system extends the official `xiaozhi-esp32-server` database (MySQL + Redis) 
 
 **LLM 代理（2026-05-06 完成）**：后端现在是多厂商大模型代理。管理员在 `llm_providers` 表中配置各厂商 API Key，每个租户分配一个 `ai_model`（即套餐）。设备通过 WebSocket 发送 `ai_chat` 消息，后端流式调用对应厂商 API，逐 chunk 推回设备。支持 DeepSeek、GLM、MiniMax、Moonshot、通义千问、火山引擎、OpenAI，均通过 `openai` npm 包 + 自定义 `baseURL` 驱动。
 
+**WebSocket 竞态修复（2026-05-06）**：`deviceWsManager.js` 的 `connection` 回调是 async 的，认证期间（`prisma.device.findFirst`）若固件已发来消息会被丢弃。修复方案：连接建立时立即注册临时缓冲监听器，认证完成后切换为正式处理器并重放缓冲消息。
+
 ## 当前环境状态（2026-05-06）✅ 全部完成
 
 > **本地环境已全部配置完成，前后端均已验证可登录。**
@@ -258,6 +260,7 @@ EspLink 路由挂载在 `/api/`（无 v1 前缀），与管理路由并存。
 | LLM model per tenant | `tenants.ai_model` field | Model selection = package differentiation; no extra tables needed |
 | LLM streaming | WebSocket `ai_chunk` messages | Device already has persistent WS; avoids second HTTP connection |
 | `usage_logs.api_key_id` nullable | Changed to `String?` | AI chat bypasses keyValidator; devices may have no api_key assigned |
+| WS connection race condition | Buffer msgs before auth, replay after | `connection` callback is async; messages arriving during DB lookup were silently dropped without the buffer |
 
 ## Database Tables
 

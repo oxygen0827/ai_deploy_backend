@@ -9,6 +9,11 @@ function setup(httpServer) {
   const wss = new WebSocketServer({ server: httpServer, path: '/ws/device' });
 
   wss.on('connection', async (ws, req) => {
+    // 在 async 认证完成前先缓冲所有消息，防止竞态丢消息
+    const msgBuffer = [];
+    const bufferMsg = (raw) => msgBuffer.push(raw);
+    ws.on('message', bufferMsg);
+
     const auth = (req.headers['authorization'] || '').trim();
     const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
     if (!token) {
@@ -40,6 +45,9 @@ function setup(httpServer) {
         data: { is_online: true, last_seen: new Date() },
       });
     } catch {}
+
+    // 切换为正式消息处理器，并重放缓冲中的消息
+    ws.off('message', bufferMsg);
 
     ws.on('message', async (raw) => {
       let msg;
@@ -117,6 +125,9 @@ function setup(httpServer) {
     });
 
     console.log(`[WS] device connected: ${mac}`);
+
+    // 重放认证期间缓冲的消息
+    for (const raw of msgBuffer) ws.emit('message', raw);
   });
 
   console.log('[WS] WebSocket 服务已启动，路径 /ws/device');
