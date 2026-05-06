@@ -141,6 +141,7 @@ backend/
 │       ├── uuid.js              # generateApiKey / generatePairToken / generateRequestId
 │       ├── response.js          # success(data) / paginated(list,page,pageSize,total) / error(code,msg)
 │       └── cert.js              # verifyDeviceSign — timingSafeEqual with length guard
+├── test_ws.js                   # WebSocket smoke test: node test_ws.js <device_key> [ping|hello|ai]
 ├── prisma/schema.prisma         # 9 models: Tenant ApiKey Device UsageLog UsageHourly PairRecord WechatUser LlmProvider
 ├── admin-frontend/
 │   ├── vite.config.js           # Proxies /api → http://localhost:8088

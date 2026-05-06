@@ -187,25 +187,31 @@ Write-Host "device_key: $deviceKey"
 
 ### 第二阶段：WebSocket 测试
 
+项目根目录提供了 `test_ws.js`，支持三种测试模式：
+
 ```powershell
-# 安装 wscat（仅需一次）
-npm install -g wscat
+# ping/pong 基础连通性
+node test_ws.js <device_key> ping
 
-# 连接 WebSocket（替换 <your_device_key>）
-wscat -c "ws://localhost:8088/ws/device" -H "Authorization: Bearer <your_device_key>"
+# hello/hello_ack 握手
+node test_ws.js <device_key> hello
+
+# 完整 AI 对话（hello → ai_chat → 流式 ai_chunk → ai_done）
+node test_ws.js <device_key> ai
 ```
 
-连上后发送握手：
-```json
-{"type":"hello","capabilities":["tts","asr"],"firmware_version":"1.0.0","session_id":"test001"}
-```
-应收到：`{"type":"hello_ack","is_bound":false,...}`
+AI 对话测试需满足：厂商 API Key 已在后台配置并启用，且设备所属租户已分配 `ai_model`。
 
-测试 AI 对话（需已配置厂商 API Key 且租户已分配模型）：
-```json
-{"type":"ai_chat","session_id":"test001","messages":[{"role":"user","content":"你好，介绍一下自己"}]}
+预期输出示例（`ai` 模式）：
 ```
-应陆续收到多条 `ai_chunk` 消息，最后收到 `ai_done`。
+[连接] WebSocket 已建立
+[发送] {"type":"hello",...}
+[收到] {"type":"hello_ack","is_bound":false}
+--- hello_ack 收到，发送 ai_chat ---
+[收到] {"type":"ai_chunk","delta":"你好"}
+你好，我是...
+✅ AI 对话完成: {"input_tokens":11,"output_tokens":15}
+```
 
 ### 第三阶段：实际硬件连接
 

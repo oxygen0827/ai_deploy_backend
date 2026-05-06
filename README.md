@@ -201,6 +201,7 @@ backend/
 │   └── jobs/               # 定时任务
 ├── prisma/
 │   └── schema.prisma       # 9 张表
+├── test_ws.js              # WebSocket 端到端测试脚本（ping / hello / ai 三档）
 ├── admin-frontend/         # React 管理后台
 │   └── src/
 │       ├── pages/          # Dashboard / Tenants / ApiKeys / Devices / Usage / Login / LlmConfig
