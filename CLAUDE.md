@@ -14,6 +14,8 @@ The system extends the official `xiaozhi-esp32-server` database (MySQL + Redis) 
 
 **WebSocket 竞态修复（2026-05-06）**：`deviceWsManager.js` 的 `connection` 回调是 async 的，认证期间（`prisma.device.findFirst`）若固件已发来消息会被丢弃。修复方案：连接建立时立即注册临时缓冲监听器，认证完成后切换为正式处理器并重放缓冲消息。
 
+**EspLink 固件编译与烧录（2026-05-06）**：固件源码位于 `C:\Users\19051\Desktop\ai_deploy\EspLink\esplink-firmware\`。ESP-IDF v5.5 已安装（`C:\Users\19051\esp\esp-idf`），目标芯片 ESP32-S3，设备串口 COM3。编译时需设 `NINJA_JOBS=1` 绕过 GCC 14.2.0 在 `esp_lcd_panel_rgb.c` 上的 internal compiler error（并行编译时触发）。
+
 ## 当前环境状态（2026-05-06）✅ 全部完成
 
 > **本地环境已全部配置完成，前后端均已验证可登录。**
@@ -29,6 +31,51 @@ The system extends the official `xiaozhi-esp32-server` database (MySQL + Redis) 
 **管理后台登录：** http://localhost:5173 — 用户名 `admin` / 密码 `xiaozhi123`
 
 > **注意：** 系统代理（Clash，port 7897）不影响浏览器访问 localhost，但会导致 curl 出现 502，属正常现象。
+
+## EspLink 固件开发（ESP32-S3）
+
+固件项目：`C:\Users\19051\Desktop\ai_deploy\EspLink\esplink-firmware\`
+
+关键配置文件：`main/main.c` 第 27 行 `BOOT_REGISTER_URL`（后端注册地址）、第 180 行传输方式（HTTP 用 `HTTP_TRANSPORT_OVER_TCP`，HTTPS 用 `HTTP_TRANSPORT_OVER_SSL`）。
+
+```powershell
+# 激活 ESP-IDF 环境（每次新开终端都需要）
+. "$env:USERPROFILE\esp\esp-idf\export.ps1"
+
+# 编译（必须设 NINJA_JOBS=1，否则 GCC 14.2 段错误）
+cd C:\Users\19051\Desktop\ai_deploy\EspLink\esplink-firmware
+$env:NINJA_JOBS = "1"
+python "$env:USERPROFILE\esp\esp-idf\tools\idf.py" build
+
+# 烧录（设备接 COM3）
+python "$env:USERPROFILE\esp\esp-idf\tools\idf.py" -p COM3 flash
+
+# 编译 + 烧录 + 串口监视器
+python "$env:USERPROFILE\esp\esp-idf\tools\idf.py" -p COM3 flash monitor
+```
+
+> **NINJA_JOBS=1 是必须的**：GCC 14.2.0 在并行编译 `esp_lcd_panel_rgb.c` 时触发 internal compiler error（Segmentation fault），单线程可绕过。
+
+当前烧录的固件配置（局域网调试）：
+```
+BOOT_REGISTER_URL = http://172.20.10.5:8088/api/ota/check
+transport_type    = HTTP_TRANSPORT_OVER_TCP
+```
+
+## EspLink 小程序配置
+
+小程序项目：`C:\Users\19051\Desktop\ai_deploy\EspLink\esplink-app\`
+
+API 地址配置：`utils/api.js` 第 1 行 `BASE_URL`。
+
+| 环境 | BASE_URL |
+|---|---|
+| 局域网调试 | `http://172.20.10.5:8088` |
+| 生产 | `https://your-domain.com` |
+
+微信开发者工具调试时须勾选「详情 → 本地设置 → 不校验合法域名」。
+
+---
 
 ## 下次开机重启服务
 
