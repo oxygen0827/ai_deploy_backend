@@ -16,7 +16,92 @@ The system extends the official `xiaozhi-esp32-server` database (MySQL + Redis) 
 
 **EspLink 固件编译与烧录（2026-05-06）**：固件源码位于 `C:\Users\19051\Desktop\ai_deploy\EspLink\esplink-firmware\`。ESP-IDF v5.5 已安装（`C:\Users\19051\esp\esp-idf`），目标芯片 ESP32-S3，设备串口 COM3。编译时需设 `NINJA_JOBS=1` 绕过 GCC 14.2.0 在 `esp_lcd_panel_rgb.c` 上的 internal compiler error（并行编译时触发）。
 
-## 当前环境状态（2026-05-06）✅ 全部完成
+**嘉立创 ESP32-S3 显示屏移植（2026-05-06）**：EspLink 固件新增 `main/app_display.c`，为嘉立创开发板（lichuang-dev）适配 ST7789 LCD 驱动。核心实现：通过 I2C（SDA=GPIO1，SCL=GPIO2）初始化 PCA9557 IO 扩展芯片（addr=0x19）释放 LCD 硬件复位，再通过 SPI3（MOSI=GPIO40，SCLK=GPIO41，DC=GPIO39）初始化 ST7789 面板，GPIO42 低电平开启背光。`app_display_fill(color)` 根据设备状态更新屏幕颜色（`set_state()` 中调用）：白=启动，蓝=BLE 配网，黄=WiFi 连接中，橙=注册中，绿=在线，红=错误。**颜色字节序修复**：ESP32 小端序 + SPI DMA 按内存顺序发送字节，ST7789 期望大端序，导致颜色显示错误（如蓝变粉）。`esp_lcd_panel_io_spi_config_t` 在本 IDF 版本无 `swap_color_bytes` 字段，改用 `__builtin_bswap16(display_color ^ 0xFFFF)` 手动修正，已修复。出厂重置方法：长按 BOOT 键（GPIO0）5 秒；若来不及长按，用 `python -m esptool --port COM3 --chip esp32s3 erase_region 0x9000 0x6000` 只擦 NVS（分区表：nvs@0x9000 size=0x6000），之后需**物理拔插 USB** 让设备重启（esptool RTS 复位不可靠）。设备 MAC=E4:B0:63:92:7D:70，BLE 广播名=Device-927D70。
+
+**固件 WiFi 断连状态机修复（2026-05-06）**：`on_wifi_disconnected` 原来只处理两种情况（配网后等待 WiFi / 在线时断开），当设备用已存凭据连 WiFi 失败（`STATE_WIFI_CONNECTING`）时什么都不做，导致设备**永远卡在黄色**。修复：重试 5 次失败后（`app_wifi.c` 的 `MAX_RETRY=5`），在 `else if (s_state == STATE_WIFI_CONNECTING)` 分支调用 `app_nvs_factory_reset()` 清除错误凭据，再调 `app_blufi_start()` 重新进入蓝色 BLE 配网模式。**重要**：配网时若小程序还开着且记住了旧密码，会在设备变蓝后立即自动重新配网写入错误凭据——需先关闭小程序再做 NVS 擦除。
+
+## 硬件联调测试流程（Mac Mini + ESP32）
+
+> **背景**：微信开发者工具的 BLE 蓝牙调试仅支持 macOS，Windows 版会报"蓝牙调试暂不支持此平台"。因此小程序调试需在 **Mac Mini** 上进行；后端仍运行在 Windows 机器（`172.20.10.5:8088`），两台机器同处同一 WiFi。
+
+### 前置条件
+
+| 项目 | 说明 |
+|---|---|
+| 后端 IP | `172.20.10.5:8088`（Windows 机器的 WiFi IP） |
+| 小程序项目 | `esplink-app/`，`utils/api.js` 第 1 行 `BASE_URL = 'http://172.20.10.5:8088'` |
+| 固件烧录 | 已烧录，`BOOT_REGISTER_URL = http://172.20.10.5:8088/api/ota/check` |
+| 设备 MAC | `E4:B0:63:92:7D:70`，BLE 广播名 `Device-927D70` |
+
+### 第一步：启动 Windows 后端
+
+在 Windows 机器上打开 PowerShell：
+
+```powershell
+$env:PATH = "$env:USERPROFILE\scoop\shims;$env:PATH"
+Start-Process -FilePath "redis-server" -WindowStyle Hidden
+Start-Process -FilePath "mysqld" -ArgumentList "--standalone" -WindowStyle Hidden
+# 等几秒
+cd C:\Users\19051\Desktop\ai_deploy\backend
+npm run dev
+```
+
+看到 `[Server] 小氧AI后台API 启动，端口 8088` 即为成功。
+
+### 第二步：Mac Mini 配置微信开发者工具
+
+1. 安装 Mac 版微信开发者工具（稳定版）
+2. 导入项目：目录选 `esplink-app/`，AppID = `wxa4fae319f609fdce`
+3. 点工具栏右侧 **「···」→「项目设置」→「本地设置」**，勾选 **「不校验合法域名...」**
+4. **工具 → 设置 → 代理 → 不使用代理**（防止系统代理导致 502）
+
+### 第三步：验证小程序登录
+
+重新编译后，Console 应看到没有报错，且 Network 有一条 `POST /api/auth/wechat` 返回 200。
+
+后端 `.env` 中 `WX_APPID` 为空，自动走 **dev 模式**（微信 code 直接当 openid 使用），无需真实微信账号体系即可完成登录。
+
+### 第四步：硬件配网测试（核心流程）
+
+**设备 LED 颜色含义**（嘉立创 ESP32-S3 LCD 屏）：
+
+| 颜色 | 状态 |
+|---|---|
+| 白色 | 刚上电启动 |
+| **蓝色** | BLE 配网模式（等待小程序配网） |
+| 黄色 | 正在连接 WiFi |
+| **橙色** | WiFi 已连，正在向后端注册 |
+| **绿色** | 在线，WebSocket 已建立 ✅ |
+| 红色 | 错误 |
+
+**步骤**：
+
+1. 给 ESP32 上电，等待屏幕变蓝（BLE 配网模式）
+2. Mac Mini 微信开发者工具模拟器中，点 **「+」添加设备**
+3. 小程序扫描 BLE 设备，找到 `Device-927D70`，点击连接
+4. 输入当前 WiFi 的 SSID 和密码，发送配网
+5. 观察设备屏幕：蓝 → 黄（连 WiFi）→ 橙（注册中）→ **绿（成功）**
+6. 小程序轮询 `GET /api/device/lookup?mac_suffix=927D70`，发现设备后弹出绑定确认
+7. 确认绑定 → 调用 `POST /api/device/bind`
+
+### 第五步：验证后台是否看到设备
+
+打开管理后台 `http://172.20.10.5:5173`（从 Mac 访问），登录 `admin / xiaozhi123`，进入「设备管理」，应能看到 MAC `E4:B0:63:92:7D:70` 的设备在线。
+
+### 常见问题
+
+| 现象 | 原因 | 解决 |
+|---|---|---|
+| 小程序登录 502 | 系统代理（Clash）拦截 | 开发者工具设置 → 代理 → 不使用代理 |
+| 小程序登录 ERR_CONNECTION_REFUSED | 后端未启动 | Windows 上执行 `npm run dev` |
+| 设备永远卡黄色 | WiFi 密码错误，重试 5 次后自动重置回蓝色（固件已修复） | 等待设备自动变回蓝色，重新配网 |
+| 设备变蓝但小程序立刻又配错 | 小程序记住了旧密码自动重配 | 关闭小程序再擦 NVS，或直接修改密码后重配 |
+| 配网成功但后台看不到设备 | `WS_BASE_URL` 配置错误，固件拿到了错误的 ws 地址 | 检查 `.env` 中 `WS_BASE_URL=ws://172.20.10.5:8088` |
+| NVS 出厂重置 | 需要擦除设备存储的旧 WiFi 凭证 | Windows：`python -m esptool --port COM3 --chip esp32s3 erase_region 0x9000 0x6000`，之后**物理拔插 USB** |
+
+---
+
+## 当前环境状态（2026-05-10）✅ 全部完成
 
 > **本地环境已全部配置完成，前后端均已验证可登录。**
 
